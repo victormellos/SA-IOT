@@ -25,12 +25,25 @@ const byte DIGITOS[10][7] = {
 const int ANGULO_FECHADO = 90;
 const int ANGULO_ABERTO  = 180;
 const int VAGAS_MAX = 9;
-const int LIMITE_DIST = 60;         // cm
-const int LIMITE_LUZ = 400;         // calibrar!
+const int LIMITE_DIST = 60;                 // cm
+const int LIMITE_LUZ = 500;                 // calibrar!
+const unsigned long ESPERA_FECHAR = 2000;   // ms livre antes de fechar
+const unsigned long TIMEOUT = 20000;        // ms
 
 Servo servoEntrada;
 Servo servoSaida;
+
 int vagas = VAGAS_MAX;
+
+// estado da ENTRADA
+bool entradaAberta = false;
+unsigned long entradaAbriu = 0;
+unsigned long entradaLivreDesde = 0;
+
+// estado da SAÍDA
+bool saidaAberta = false;
+unsigned long saidaAbriu = 0;
+unsigned long saidaLivreDesde = 0;
 
 long lerDistanciaCm() {
   digitalWrite(TRIG, LOW);
@@ -41,6 +54,12 @@ long lerDistanciaCm() {
   long d = pulseIn(ECHO, HIGH, 30000);
   if (d == 0) return 999;
   return d * 0.034 / 2;
+}
+
+int lerLuz() {
+  long soma = 0;
+  for (int i = 0; i < 4; i++) soma += analogRead(LDR_PIN);
+  return soma / 4;
 }
 
 void mostraNumero(int n) {
@@ -56,24 +75,70 @@ void atualizaDisplay() {
   Serial.println(vagas);
 }
 
-void abreEntrada() {
-  servoEntrada.write(ANGULO_ABERTO);
-  Serial.println("Entrada: abriu");
-  delay(3000);
-  servoEntrada.write(ANGULO_FECHADO);
-  Serial.println("Entrada: fechou");
-  vagas--;
-  atualizaDisplay();
+void atualizaEntrada(bool carro) {
+  unsigned long agora = millis();
+
+  if (!entradaAberta) {
+    if (carro && vagas > 0) {
+      servoEntrada.write(ANGULO_ABERTO);
+      entradaAberta = true;
+      entradaAbriu = agora;
+      entradaLivreDesde = 0;
+      Serial.println("Entrada: abriu");
+    }
+  } else {
+    if (carro) {
+      entradaLivreDesde = 0;
+    } else {
+      if (entradaLivreDesde == 0) entradaLivreDesde = agora;
+      if (agora - entradaLivreDesde >= ESPERA_FECHAR) {
+        servoEntrada.write(ANGULO_FECHADO);
+        entradaAberta = false;
+        vagas = constrain(vagas - 1, 0, VAGAS_MAX);
+        Serial.println("Entrada: fechou");
+        atualizaDisplay();
+        return;
+      }
+    }
+    if (agora - entradaAbriu > TIMEOUT) {
+      servoEntrada.write(ANGULO_FECHADO);
+      entradaAberta = false;
+      Serial.println("Entrada: sensor travado, fechou sem contar");
+    }
+  }
 }
 
-void abreSaida() {
-  servoSaida.write(ANGULO_ABERTO);
-  Serial.println("Saida: abriu");
-  delay(3000);
-  servoSaida.write(ANGULO_FECHADO);
-  Serial.println("Saida: fechou");
-  if (vagas < VAGAS_MAX) vagas++;
-  atualizaDisplay();
+void atualizaSaida(bool carro) {
+  unsigned long agora = millis();
+
+  if (!saidaAberta) {
+    if (carro) {
+      servoSaida.write(ANGULO_ABERTO);
+      saidaAberta = true;
+      saidaAbriu = agora;
+      saidaLivreDesde = 0;
+      Serial.println("Saida: abriu");
+    }
+  } else {
+    if (carro) {
+      saidaLivreDesde = 0;
+    } else {
+      if (saidaLivreDesde == 0) saidaLivreDesde = agora;
+      if (agora - saidaLivreDesde >= ESPERA_FECHAR) {
+        servoSaida.write(ANGULO_FECHADO);
+        saidaAberta = false;
+        vagas = constrain(vagas + 1, 0, VAGAS_MAX);
+        Serial.println("Saida: fechou");
+        atualizaDisplay();
+        return;
+      }
+    }
+    if (agora - saidaAbriu > TIMEOUT) {
+      servoSaida.write(ANGULO_FECHADO);
+      saidaAberta = false;
+      Serial.println("Saida: sensor travado, fechou sem contar");
+    }
+  }
 }
 
 void setup() {
@@ -92,17 +157,10 @@ void setup() {
 
 void loop() {
   long dist = lerDistanciaCm();
-  int luz = analogRead(LDR_PIN);
+  int luz = lerLuz();
 
-  // ENTRADA
-  if (dist < LIMITE_DIST && vagas > 0) {
-    abreEntrada();
-  }
+  atualizaEntrada(dist < LIMITE_DIST);
+  atualizaSaida(luz < LIMITE_LUZ);
 
-  // SAÍDA
-  if (luz < LIMITE_LUZ) {
-    abreSaida();
-  }
-
-  delay(50);
+  delay(20);
 }
